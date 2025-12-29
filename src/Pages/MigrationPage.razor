@@ -1,0 +1,267 @@
+@page "/migration"
+@using System.Diagnostics
+@using System.IO
+@using Cyan_Service_Migration.Services
+@using Microsoft.AspNetCore.Components.Server
+@inject IJSRuntime JSRuntime
+@inject IHttpContextAccessor HttpContextAccessor
+@inject MigrationLockService lockService;
+
+
+<PageTitle>Migration</PageTitle>
+
+<h1>手动服务同步</h1>
+
+@if (lockService.GetCurrentLockStatus(out var runningOpId, out var runningIp, out var elapsedTime) && !isExecuting)
+{
+    <div class="alert alert-warning" role="alert">
+        <strong>警告：</strong>有其他用户正在执行同步操作。
+        <br />操作ID: @runningOpId
+        <br />IP地址: @runningIp
+        <br />已运行时间: @elapsedTime.Minutes 分 @elapsedTime.Seconds 秒
+        <br />请等待该操作完成后再试。
+    </div>
+}
+else
+{
+    <div class="alert alert-info" role="alert">
+        点击下方按钮执行迁移脚本，请勿重复点击。
+    </div>
+}
+
+<div class="d-flex align-items-center gap-3">
+    <input type="text" class="form-control" placeholder="请输入关键字,如feiyong" @bind="FilterKeyword" style="width: 200px;" />
+    <button class="btn btn-primary" @onclick="ExecuteMigration" disabled="@(isExecuting || lockService.GetCurrentLockStatus(out _, out _, out _))">
+        @(isExecuting ? "执行中..." : "执行同步")
+    </button>
+    @if (isExecuting)
+    {
+        <div class="text-muted">
+            <span>操作ID: @operationId</span>
+            <span class="mx-2">|</span>
+            <span>IP: @clientIp</span>
+            <span class="mx-2">|</span>
+            <span></span>
+        </div>
+    }
+    else if (isCompleted)
+    {
+        <div class="text-success">
+            <span>操作ID: @operationId</span>
+            <span class="mx-2">|</span>
+            <span>IP: @clientIp</span>
+            <span class="mx-2">|</span>
+            <span>总耗时: @executionTime</span>
+        </div>
+    }
+</div>
+
+@if (!string.IsNullOrEmpty(output))
+{
+    <div class="mt-4">
+        <h3>执行输出:</h3>
+        <pre class="bg-light p-3 rounded" style="white-space: pre-wrap; word-break: break-all; height: 600px; overflow-y: auto;" @ref="logElement">@output</pre>
+    </div>
+}
+
+@code {
+    private bool isExecuting = false;
+    private bool isCompleted = false;
+    private string currentRunningOperationId = string.Empty;
+    private string currentRunningClientIp = string.Empty;
+    private string currentRunningTime = string.Empty;
+    private System.Timers.Timer _statusUpdateTimer;
+    private string output = string.Empty;
+    private ElementReference logElement;
+    private string operationId = string.Empty;
+    private string clientIp = string.Empty;
+    private string executionTime = string.Empty;
+    private string FilterKeyword { get; set; } = string.Empty;
+
+    protected override void OnInitialized()
+    {
+        _statusUpdateTimer = new System.Timers.Timer(1000); // 每秒更新一次状态
+        _statusUpdateTimer.Elapsed += async (sender, e) =>
+        {
+            if (lockService.GetCurrentLockStatus(out var opId, out var ip, out var elapsed))
+            {
+                currentRunningOperationId = opId;
+                currentRunningClientIp = ip;
+                currentRunningTime = $"{elapsed.Minutes}分{elapsed.Seconds}秒";
+            }
+            else
+            {
+                currentRunningOperationId = string.Empty;
+                currentRunningClientIp = string.Empty;
+                currentRunningTime = string.Empty;
+            }
+            await InvokeAsync(StateHasChanged);
+        };
+        _statusUpdateTimer.Start();
+    }
+
+    private CancellationTokenSource _cancellationTokenSource;
+
+    public void Dispose()
+    {
+        _statusUpdateTimer?.Dispose();
+        _cancellationTokenSource?.Cancel();
+        _cancellationTokenSource?.Dispose();
+    }
+
+    private async Task ScrollToBottom()
+    {
+        
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("scrollToBottom", logElement);
+        }
+        catch (JSDisconnectedException)
+        {
+            // 忽略已断开连接的异常
+        }        
+    }
+
+    private async Task ExecuteMigration()
+    {
+        isExecuting = true;
+        isCompleted = false;
+        output = string.Empty;
+        operationId = Guid.NewGuid().ToString();
+
+        // 获取客户端IP地址
+        var context = HttpContextAccessor.HttpContext;
+        if (context?.Connection.RemoteIpAddress != null)
+        {
+            clientIp = context.Connection.RemoteIpAddress.ToString();
+        }
+        else
+        {
+            clientIp = "IP地址不详";
+        }
+
+        try
+        {
+            _cancellationTokenSource = new CancellationTokenSource();
+            var cancellationToken = _cancellationTokenSource.Token;
+
+            // 尝试获取迁移锁
+            if (!lockService.TryAcquireLock(operationId, clientIp))
+            {
+                // 获取当前运行中的任务信息
+                lockService.GetCurrentLockStatus(out var runningOpId, out var runningIp, out var elapsedTime);
+                output = $"无法执行同步操作：已有同步任务正在进行中。\n当前操作ID: {runningOpId}\nIP地址: {runningIp}\n已运行时间: {elapsedTime.Minutes}分{elapsedTime.Seconds}秒\n请等待该操作完成后再试。";
+                return;
+            }
+
+            var scriptPath = Path.Combine(Directory.GetCurrentDirectory(), "migration.sh");
+
+            // 检查脚本文件是否存在
+            if (!File.Exists(scriptPath))
+            {
+                output = "错误：找不到迁移脚本文件migration.sh，请确认文件是否存在于项目根目录。";
+                return;
+            }
+
+            // 确定Windows环境下的Bash可执行文件路径
+            string bashPath;
+            
+            // 检查操作系统类型
+            if (Environment.OSVersion.Platform == PlatformID.Unix || 
+                Environment.OSVersion.Platform == PlatformID.MacOSX)
+            {
+                // Linux/MacOS系统下直接使用bash
+                bashPath = "bash";
+            }
+            else if (Environment.OSVersion.Platform == PlatformID.Win32NT)
+            {
+                // Windows系统下查找Git Bash或WSL
+                var gitBashPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "Git", "bin", "bash.exe");
+                if (File.Exists(gitBashPath))
+                {
+                    bashPath = gitBashPath;
+                }
+                else
+                {
+                    // 检查WSL路径
+                    gitBashPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "bash.exe");
+                    if (File.Exists(gitBashPath))
+                    {
+                        bashPath = gitBashPath;
+                    }
+                    else
+                    {
+                        output = "错误：未找到Bash可执行文件。请安装Git Bash或WSL以运行.sh脚本。";
+                        return;
+                    }
+                }
+            }
+            else
+            {
+                output = $"不支持的操作系统: {Environment.OSVersion.Platform}";
+                return;
+            }
+
+            var process = new Process
+                {
+                    StartInfo = new ProcessStartInfo
+                    {
+                        FileName = bashPath,
+                        Arguments = string.IsNullOrEmpty(FilterKeyword) ? $"\"{scriptPath}\"" : $"\"{scriptPath}\" \"{FilterKeyword}\"",
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true,
+                        UseShellExecute = false,
+                        CreateNoWindow = true,
+                        WorkingDirectory = Directory.GetCurrentDirectory()
+                    },
+                    EnableRaisingEvents = true
+                };
+
+            // 订阅输出事件
+            process.OutputDataReceived += async (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    output += e.Data + "\n";
+                    _ = InvokeAsync(StateHasChanged);
+                    await ScrollToBottom();
+                }
+            };
+
+            // 订阅错误事件
+            process.ErrorDataReceived += async (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    output += "Error: " + e.Data + "\n";
+                    _ = InvokeAsync(StateHasChanged);
+                    await ScrollToBottom();
+                }
+            };
+
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            var stopwatch = Stopwatch.StartNew();
+            // 使用带取消令牌的等待
+            var exitTask = process.WaitForExitAsync(cancellationToken);
+            await exitTask;
+            stopwatch.Stop();
+            
+            output += $"\nExit Code: {process.ExitCode}";
+            output += $"\n总耗时: {stopwatch.Elapsed.Minutes}分{stopwatch.Elapsed.Seconds}秒{stopwatch.Elapsed.Milliseconds}毫秒";
+            executionTime = $"{stopwatch.Elapsed.Minutes}分{stopwatch.Elapsed.Seconds}秒{stopwatch.Elapsed.Milliseconds}毫秒";
+        }
+        catch (Exception ex)
+        {
+            output = $"发生异常: {ex.Message}\n\n堆栈跟踪:\n{ex.StackTrace}";
+        }
+        finally
+        {
+            isExecuting = false;
+            isCompleted = true;
+            lockService.MarkAsCompleted();
+        }
+    }
+}

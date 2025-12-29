@@ -1,0 +1,114 @@
+@page "/logs"
+@inject IWebHostEnvironment env
+
+<h3>日志查看</h3>
+
+<div class="row mt-4">
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0">日志文件列表</h5>
+            </div>
+            <div class="card-body overflow-auto" style="max-height: 800px;">
+                @if (logFiles == null || logFiles.Count == 0)
+                {
+                    <p class="text-muted">暂无日志文件</p>
+                }
+                else
+                {
+                    <ul class="list-group list-group-flush">
+                        @foreach (var file in logFiles.OrderByDescending(f => f.CreationTime))
+                        {
+                            <li class="list-group-item">
+                                <button class="btn btn-link p-0 text-left" @onclick="() => ViewLogFile(file)">
+                                    @file.Name
+                                </button>
+                                <small class="d-block text-muted">@file.CreationTime.ToString("yyyy-MM-dd HH:mm:ss")</small>
+                            </li>
+                        }
+                    </ul>
+                }
+            </div>
+        </div>
+    </div>
+    <div class="col-md-8">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0">@(selectedFile != null ? selectedFile.Name : "日志内容")</h5>
+                @if (selectedFile != null)
+                {
+                    <button class="btn btn-sm btn-outline-secondary ms-2" @onclick="ClearSelectedFile">关闭</button>
+                }
+            </div>
+            <div class="card-body overflow-auto" style="max-height: 800px;">
+                @if (selectedFile == null)
+                {
+                    <p class="text-muted text-center">请从左侧选择一个日志文件查看</p>
+                }
+                else if (isLoading)
+                {
+                    <p class="text-center"><em>加载中...</em></p>
+                }
+                else
+                {
+                    <pre class="bg-light p-3 rounded" style="white-space: pre-wrap;">@logContent</pre>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<FileInfo> logFiles = new();
+    private FileInfo? selectedFile;
+    private string logContent = string.Empty;
+    private bool isLoading = false;
+    private string logDirectory = "Logs";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadLogFiles();
+    }
+
+    private async Task LoadLogFiles()
+    {
+        var logPath = Path.Combine(env.ContentRootPath, logDirectory);
+        if (Directory.Exists(logPath))
+        {
+            logFiles = new DirectoryInfo(logPath)
+                .GetFiles("*.log")
+                .ToList();
+        }
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task ViewLogFile(FileInfo file)
+    {
+        selectedFile = file;
+        isLoading = true;
+        logContent = string.Empty;
+        await InvokeAsync(StateHasChanged);
+
+        try
+        {
+            logContent = await File.ReadAllTextAsync(file.FullName);
+        }
+        catch (Exception ex)
+        {
+            logContent = $"读取日志文件时出错: {ex.Message}";
+        }
+        finally
+        {
+            isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void ClearSelectedFile()
+    {
+        selectedFile = null;
+        logContent = string.Empty;
+        isLoading = false;
+        InvokeAsync(StateHasChanged);
+    }
+}
