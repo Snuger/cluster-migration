@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<!-- https://go.microsoft.com/fwlink/?LinkID=208121. -->
+<Project>
+  <PropertyGroup>
+    <_PublishTargetUrl>D:\Work-Studio\辅助工具\Cyan-Service-Migration\bin\Release\net6.0\publish\linux-amd-64</_PublishTargetUrl>
+    <History>True|2025-07-25T08:18:57.8832936Z||;True|2025-07-25T14:59:08.7445459+08:00||;True|2025-07-25T10:18:15.8766455+08:00||;True|2025-07-25T09:59:29.9777561+08:00||;True|2025-07-24T18:56:54.9631220+08:00||;True|2025-07-24T18:39:34.9751089+08:00||;True|2025-07-24T17:14:40.6994423+08:00||;True|2025-07-24T16:40:58.5445927+08:00||;True|2025-07-24T16:39:02.1978654+08:00||;True|2025-07-24T14:49:33.3164277+08:00||;True|2025-07-24T14:38:05.4391437+08:00||;True|2025-07-24T14:32:19.0877462+08:00||;True|2025-07-24T14:25:57.6388604+08:00||;True|2025-07-24T14:14:22.1973517+08:00||;True|2025-07-24T14:13:43.6500315+08:00||;</History>
+    <LastFailureDetails />
+  </PropertyGroup>
+</Project>
